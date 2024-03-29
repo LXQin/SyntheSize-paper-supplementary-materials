@@ -2,6 +2,14 @@
 
 This repository stores the data, results, and R scripts to generate these reuslts and figures for the corresponding paper *Optimizing Sample Size for Statistical Learning in Bulk Transcriptome Sequencing: A Learning Curve Approach*.
 
+The method involves two algorithms: SyNG-BTS for augmenting sample sizes using deep generative models and SyntheSize for determing the optimal sample size.
+
+SyNG-BTS is a data augmentation tool synthesizing transcriptomics data with realistic distributions without relying on a predefined formula. Three deep generative models are considered, incluing Variational Auto Encoder (VAE), Generative Adversarial Network (GAN), and flow-based generative model. Those models will be trained on a pilot dataset and then utilized to generate data for any desired number of samples. The workflow of SyNG-BTS is depicted in the following figure:
+
+<p align="center">
+  <img src="./pics/sygn-bts-workflow.jpg" width = "1000" alt="method" align=center />
+</p>
+
 SyntheSize is a supervised learning framework designed for determining the optimal sample size by utilizing synthesized data across various sample sizes. This framework employs the inverse power law function (IPLF) to accurately fit augmented data corresponding to different sample sizes and their respective prediction accuracies. SyntheSize also illustrates the generated results through heatmap and UMAP(Uniform Manifold Approximation and Projection).
 
 The workflow of SyntheSize is depicted in the following figure:
