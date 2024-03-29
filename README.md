@@ -10,6 +10,8 @@ SyNG-BTS is a data augmentation tool synthesizing transcriptomics data with real
   <img src="./pics/sygn-bts-workflow.jpg" width = "1000" alt="method" align=center />
 </p>
 
+Original code for SyNG-BTS can be referred to [SyNG-BTS](https://github.com/LXQin/SyNG-BTS). 
+
 SyntheSize is a supervised learning framework designed for determining the optimal sample size by utilizing synthesized data across various sample sizes. This framework employs the inverse power law function (IPLF) to accurately fit augmented data corresponding to different sample sizes and their respective prediction accuracies. SyntheSize also illustrates the generated results through heatmap and UMAP(Uniform Manifold Approximation and Projection).
 
 The workflow of SyntheSize is depicted in the following figure:
