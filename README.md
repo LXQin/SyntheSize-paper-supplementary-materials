@@ -4,6 +4,13 @@ This repository stores the data, results, and R scripts to generate these reuslt
 
 SyntheSize is a supervised learning framework designed for determining the optimal sample size by utilizing synthesized data across various sample sizes. This framework employs the inverse power law function (IPLF) to accurately fit augmented data corresponding to different sample sizes and their respective prediction accuracies. SyntheSize also illustrates the generated results through heatmap and UMAP(Uniform Manifold Approximation and Projection).
 
+The workflow of SyntheSize is depicted in the following figure:
+
+<p align="center">
+  <img src="./pics/synthesize-workflow.jpg" width = "1000" alt="method" align=center />
+</p>
+
+
 Original code for SyntheSize can be referred to [SyntheSize](https://github.com/LXQin/SyntheSize). 
 
 ## Installation
