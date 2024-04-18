@@ -686,4 +686,140 @@ vis_classifier(metric_generated = metric_generated,
                save_root = save_root)
 ```
 
+# RNAImmunology classification Benefit
+```{r, data organization and feature selection Benefit}
+load("/Users/yunhuiqi/Library/Mobile Documents/com~apple~CloudDocs/PhD/Interns/2021 Summer/Generative Models/DGMmicroRNA/Case/NatMedIO/RawData.RData")
+gene_names <- RNA$gene_name
+# the input data is normalized data on log2 scale
+RNA_log <- RNA[,2:ncol(RNA)]
+# rownames(RNA_log) <- gene_names there are duplicated names, this will not run, names will be assigned later
+
+# align samples in meta and normalized data matrix
+rownames(meta_RNA) <- meta_RNA$RNA_ID # RNA_id the sample id, not gene id
+meta_RNA <- meta_RNA[colnames(RNA_log),] 
+mean(colnames(RNA_log)==meta_RNA$RNA_ID)
+
+# focus on all corhorts, arm = medicine and Benefit is our target class
+sample_sel <- meta_RNA$Arm == "NIVOLUMAB" & meta_RNA$Benefit %in% c("NCB", "CB")
+meta_RNA_sub <- meta_RNA[sample_sel,]
+RNA_log_sub <- RNA_log[,sample_sel]
+
+# gene selection based on two sample t test pvalues
+gene_var_CB <- apply(RNA_log_sub, 1, function(x){var(x[meta_RNA_sub$Benefit == "CB"])})
+gene_var_NCB <- apply(RNA_log_sub, 1, function(x){var(x[meta_RNA_sub$Benefit == "NCB"])})
+# before formal selection, remove genes with  with variance <= 5 in either group, from 43893 to 8486
+genes_sel_pre <- (gene_var_CB > 5 & gene_var_NCB > 5)
+RNA_log_sub_sel_pre <- RNA_log_sub[genes_sel_pre,]
+# get pvalues for group comparison for each gene
+t_pvalues <- apply(RNA_log_sub_sel_pre, 1, function(x){t.test(x[meta_RNA_sub$Benefit == "CB"], x[meta_RNA_sub$Benefit != "CB"])$p.value})
+summary(t_pvalues)
+# feature selection based on t_pvalues
+RNA_log_sub_sel <- RNA_log_sub_sel_pre[(t_pvalues < 0.01),]
+dim(RNA_log_sub_sel) # genes are still in rows, we need to transpose and set "apply_log=FALSE" in SyNG-BTS
+# assign gene names
+rownames(RNA_log_sub_sel) <- gene_names[as.numeric(rownames(RNA_log_sub_sel))]
+
+# create data for SyNG_BTS and save
+real_onlog <- as.data.frame(t(RNA_log_sub_sel))
+real_onlog$groups <- meta_RNA_sub$Benefit
+# sort by the benefit labels
+real_onlog <- real_onlog[order(real_onlog$groups),]
+# write.table(real_onlog, "../Case/NatMedIO/IOPD1_onlog_Benefit_small.csv", sep =",", row.names = F, col.names = T)
+
+real_onlog <- read.csv("../Case/NatMedIO/IOPD1_onlog_Benefit_small.csv")
+# a little bit visualization before proceed
+annotation_row <- ComplexHeatmap::HeatmapAnnotation(groups = real_onlog$groups, which = "row")
+ComplexHeatmap::Heatmap(select_if(real_onlog, is.numeric), cluster_rows = FALSE, right_annotation = annotation_row, cluster_columns = FALSE)
+
+# a little bit classification try based on real data
+metric_real <- eval_classifier(select_if(real_onlog, is.numeric), real_onlog$groups, n_candidate = seq(10,100,10), n_draw = 20, log = TRUE)
+
+vis_classifier(metric_real, metric_real, c(110,120,130), save_root = "../Case/NatMedIO/")
+
+# write.table(metric_real, "../Case/NatMedIO/metric_real_Benefit_small.csv", sep =",", row.names = F, col.names = T)
+
+metric_real <- read.csv("../Case/NatMedIO/metric_real_Benefit_small.csv")
+p_svm_box <- ggplot(metric_real[metric_real$method == "SVM",], aes (x=factor(total_size), y=accuracy,fill =  method))+geom_boxplot(show.legend = TRUE)+
+  stat_summary(
+    fun.y = median,
+    geom = 'line',
+    aes(group = method, colour = method),
+    position = position_dodge(width = 0.9), #this has to be added,
+    show.legend = TRUE
+  )+
+  labs(x= "Sample size", y = "Accuracy", title = "")+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        legend.position = "right",
+  panel.grid.minor = element_blank(), axis.line = element_blank())+
+      theme_bw()+
+      theme(legend.title=element_blank())+
+      theme(plot.title = element_text(hjust = 0.5))+
+      ylim(0, 1)+
+  scale_fill_d3()+
+  scale_y_continuous(breaks = seq(0.1,1,0.1))
+
+# ggsave("../Case/NatMedIO/Case_IOPD1_SVM_real.pdf", p_svm_box, height = 4, width = 6, unit = "in")
+  
+
+# pca_data <- scale(select(real_onlog, is.numeric))
+# pca <- eigen(cor(pca_data))$vectors
+# 
+# ggplot(data.frame(PC1=pca_data%*%pca[,1], PC2=pca_data%*%pca[,2], Benefit=real_onlog$groups))+
+#   geom_point(aes(x=PC1, y=PC2, color = Benefit))
+
+
+```
+
+```{r, classification Benefit}
+generated <- read.csv("../Case/NatMedIO/IOPD1_onlog_Benefit_small_Gaussianhead_epochES_CVAE1-50_generated.csv", header = F)
+real_onlog <- read.csv("../Case/NatMedIO/IOPD1_onlog_Benefit_small.csv", header = T)
+groups_real <- real_onlog$groups
+# CB is the group for the first sample, it is set to have label 0 in SyNG-BTS
+groups_generated <- ifelse(generated[, ncol(generated)] == 0, "CB", "NCB")
+real_onlog <- select_if(real_onlog, is.numeric)
+real <- real_onlog
+generated <- generated[,1:ncol(real)]
+colnames(generated) <- colnames(real)
+# heatmap quality evaluation
+h_IOPD1 <- heatmap_eval(real,
+             generated[c(1:57, 934:1000),], main = "")
+# UMAP quality evaluation
+p_umap_IOPD1 <- UMAP_eval(dat_combine = rbind(real,
+                                        generated[c(1:57, 934:1000),]),
+                    groups = c(groups_real,
+                               groups_generated[c(1:57, 934:1000)]),
+                    log = TRUE, failure = "remove")
+umap_IOPD1 <- p_umap_IOPD1$p_umap + theme(legend.position = "right") +scale_color_aaas()
+print(h_IOPD1)
+print(umap_IOPD1)
+# pdf("../Case/NatMedIO/Case_IOPD1_Heatmap_Generated.pdf", width = 12, height = 8)
+annotation_row <- ComplexHeatmap::HeatmapAnnotation(Groups = groups_generated[c(1:57, 934:1000)], which = "row",
+                                                    col=list(Groups = c("CB" = "lightblue", "NCB" = "pink")))
+print(ComplexHeatmap::Heatmap(generated[c(1:57, 934:1000),apply(generated, 2, var)>0], cluster_rows = FALSE, right_annotation = annotation_row, 
+                         cluster_columns = FALSE, col = colorRamp2(c(20, 50), c("blue", "red")),
+                         name = "Generated \nExpression",show_row_names = FALSE))
+# dev.off()
+# pdf("../Case/NatMedIO/Case_IOPD1_Heatmap_Real.pdf", width = 12, height = 8)
+annotation_row <- ComplexHeatmap::HeatmapAnnotation(Groups = groups_real, which = "row",
+                                                    col=list(Groups = c("CB" = "lightblue", "NCB" = "pink")))
+print(ComplexHeatmap::Heatmap(real[,apply(generated, 2, var)>0], cluster_rows = FALSE, right_annotation = annotation_row, 
+                        cluster_columns = FALSE, col = colorRamp2(c(20, 50), c("blue", "red")),
+                         name = "Real \nExpression",show_row_names = FALSE))
+# dev.off()
+
+
+# ggsave("../Case/NatMedIO/Case_IOPD1_UMAP.pdf", umap_IOPD1, height = 4, width = 6, unit = "in")
+
+set.seed(111)
+n_candidate <- seq(10, 200, 8)
+n_target = c(210, 220, 230)
+save_root <- "../Case/NatMedIO/"
+metric_generated <- eval_classifier(generated, groups_generated,
+                                    n_candidate, n_draw = 20, log = TRUE)
+# write.table(metric_generated, "../Case/NatMedIO/metric_generated_Benefit_small.csv", sep =",", row.names = F, col.names = T)
+# metric_generated <- read.csv("../Case/NatMedIO/metric_generated_Benefit_small.csv", header = TRUE)
+vis_classifier(metric_generated, metric_generated, n_target, save_root)
+```
+
+
 
