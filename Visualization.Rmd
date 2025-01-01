@@ -1,0 +1,933 @@
+---
+title: "Visualization"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(ggh4x)
+library(RColorBrewer)
+library(ggsci)
+library(beanplot)
+library(ggforce)
+library(cowplot)
+```
+
+## Description of this file
+
+This file is used to generates all evaluation figures in the main text and supplement. For figures in Figure 6 (application of SyntheSize), please refer to CaseStudy.Rmd. 
+
+For successfully running this file, please make sure you have already get the raw data from TCGA (by DataOrganization), run deep generative models using code in /Python/ and generate the output data file, run Evaluation.Rmd and get the .RData file which contains the evaluation results for the generated samples from deep generative models. 
+
+We also provide the evaluation .RData files for all evaluation experiments in our paper in folder /FinalResAug2023/, if you prefer to only generate the figures rather than run the pipeline from very beginning. You can directly run this code with /FinalResAug2023/ downloaded in your local computer. The generated figures will also be saved to this folder. In addition, for the UMAP, you need the original data files, we also provide /GeneratedData/ and /RealData/ including the data files needed to generated the corresponding figures. 
+
+
+## miRNA results visualization
+```{r, define miRNA visualization function}
+  gg_default <- function(p){
+    pp <- p +
+      theme(legend.position = "bottom")+
+      # guides(fill=guide_legend(nrow = 1,byrow = TRUE))+
+      theme(strip.text.x = element_text(face = "bold", size = 12),
+            strip.text.y = element_text(face = "bold", size = 10),
+            legend.title=element_text(size = 10), 
+            legend.text=element_text(size = 9),
+            axis.text = element_text(size = 10),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank())
+    return(pp)
+  }
+UMAP_eval <- function(dat_combine, groups = NULL, log = TRUE, failure= c("replace", "remove")){
+  if(!log){
+    dat_combine <- log2(dat_combine+1)
+  }
+  
+  dat_real <- dat_combine[1:(nrow(dat_combine)/2), ]
+  dat_generated <- dat_combine[(nrow(dat_combine)/2+1):nrow(dat_combine), ]
+  
+  if(failure == "remove"){
+    dat_real <- dat_real[, apply(dat_generated, 2, sd) != 0]
+    dat_generated <- dat_generated[, apply(dat_generated, 2, sd) != 0]
+    dat_combine <- rbind(dat_real, dat_generated)
+  }
+  else if(failure == "replace"){
+    dat_generated[ ,apply(dat_generated, 2, sd) == 0] <- dat_real[ ,apply(dat_generated, 2, sd) == 0]
+    dat_combine <- rbind(dat_real, dat_generated)
+  }
+  if(length(groups) == 0.5*nrow(dat_combine)){
+    groups_combine <- c(groups, groups)
+    groups_real <-  groups
+    groups_generated <-  groups
+  }
+  else{
+    groups_combine <- groups
+    groups_real <- groups_combine[1:(length(groups_combine)/2)]
+    groups_generated <- groups_combine[(length(groups_combine)/2+1):length(groups_combine)]
+  }
+  mat <- as.matrix(dat_combine)
+  datatype <- rep(c("real","generated"), rep(nrow(mat)/2, 2))
+  UMAP_fit <- umap::umap(mat)
+  UMAP_df <- UMAP_fit$layout %>% 
+    as.data.frame() %>%
+    rename(UMAP1 = "V1", UMAP2 = "V2") %>%
+    mutate(ID = row_number())
+  if(is.null(groups)){
+    factor_df <- data.frame(datatype = datatype) %>% mutate(ID=row_number())
+    plot_df <- UMAP_df %>% inner_join(factor_df, by="ID")
+    p_umap <- plot_df %>% ggplot(aes(x = UMAP1, y = UMAP2, 
+                                     color = datatype))+
+      geom_point()+
+      theme(legend.position="bottom")+
+      labs(title="UMAP plot of combined samples")
+  }
+  else{
+    factor_df <- data.frame(groups = groups_combine, datatype = datatype) %>% mutate(ID=row_number())
+    plot_df <- UMAP_df %>% inner_join(factor_df, by="ID")
+    p_umap <- plot_df %>% ggplot(aes(x = UMAP1, y = UMAP2, 
+                                     color = datatype, shape = groups))+
+      geom_point()+
+      theme(legend.position="bottom")+
+      labs(title="UMAP plot of combined samples")+
+      theme_bw()
+  }
+  return(list(plot_df = plot_df, p_umap = p_umap))
+}
+vis_all <- function(dataname, nickname, cancer_type = c(1, 2)){
+  # This function visualization the results of DGM evaluation
+  # dataname = "SKCMPositive_4", nickname = "skcm_pos", cancer_type = 1
+  
+
+  # Step1: load data ####
+  default <- "FinalResAug2023/"
+  load(paste(default, dataname, ".RData", sep = ""))
+  load(paste(default, dataname, "_AEhead.RData", sep = ""))
+  load(paste(default, dataname, "_Normalization.RData", sep = ""))
+  load(paste(default, dataname, "_Batch.RData", sep = ""))
+  load(paste(default, dataname, "_Epoch.RData", sep = ""))
+  overall <- get(nickname)
+  offline <- get(paste(nickname, "_AEhead", sep = ""))
+  norm <- get(paste(nickname, "_norm", sep = ""))
+  batch <-  get(paste(nickname, "_batch", sep = ""))
+  epoch <-  get(paste(nickname, "_epoch", sep = ""))
+  
+  # Step2: generate dataframes for plotting  ####
+  if(cancer_type == 1){
+    # Evaluation criteria: 1-Prop.successful.genes, 2-CCC.pos.control, 3-cARI, 4-MAD
+    mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(2,4,6)], brewer.pal(n = 8, name = "Oranges")[c(2,4,6)], brewer.pal(n = 8, name = "Greens")[c(2,4,6)])
+    plot_width <- c(10,10,16,7,7,7)
+    plot_height <- c(6,6,6,6,6,6)
+    df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 3){lvs <- c("VAE1-10","MAF","WGANGP")}
+      else{lvs <- c("VAE1-1", "VAE1-5", "VAE1-10","RealNVP","GLOW","MAF","GAN", "WGAN", "WGANGP")}
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res$ccc_pos[res$ccc_pos<0 | is.na(res$ccc_pos)] <- 0
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res <- tidyr::pivot_longer(res, cols = c("ARI", "ccc_pos", "succ_prop"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_pos"),
+                           labels = c("1 - Pct(0-markers)", "cARI", "CCCPCC"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
+      return(res)
+    }
+    heatmap_proc <- function(res){
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 4){lvs <- c("VAE1-10","MAF","WGANGP")}
+      else{lvs <- c("VAE1-1", "VAE1-5", "VAE1-10","RealNVP","GLOW","MAF","GAN", "WGAN", "WGANGP")}
+      res$model <- factor(model, levels = rev(lvs))
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res <- res %>% group_by(pilot_size, model, modeltype) %>%
+        summarise(
+          Mean = mean(ks_mean, na.rm=TRUE),
+          Sd = mean(ks_sd, na.rm=TRUE),
+          Sparsity = mean(ks_zero, na.rm=TRUE)
+        )
+      
+      res <- tidyr::pivot_longer(res, cols = c("Mean", "Sd", "Sparsity"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = (c("Mean", "Sd", "Sparsity")), labels = c("MAD(Mean)","MAD(SD)","MAD(Sparsity)"))
+      res$text <- round(res$Rate, 3)
+      res$text[res$Rate > 6 | is.na(res$Rate)] <- ">6"
+      res$Rate[res$Rate > 6 | is.na(res$Rate)] <- 6
+      res$modelorder <-  rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(res$model[i] %in% c("VAE1-1","GAN","RealNVP")){res$modelorder[i] <- "VAE1-1/RealNVP/GAN"}
+        else if(res$model[i] %in% c("VAE1-5","WGAN","GLOW")){res$modelorder[i] <- "VAE1-5/GLOW/WGAN"}
+        else{res$modelorder[i] <- "VAE1-10/MAF/WGANGP"}
+      }
+      res$modelorder <- factor(res$modelorder, levels = c("VAE1-10/MAF/WGANGP", "VAE1-5/GLOW/WGAN", "VAE1-1/RealNVP/GAN"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
+      return(res)
+    }
+  }
+  else{
+    # Evaluation criteria: 1-Prop.successful.genes, 2-CCC.pos.control, 3-ARI, 4-MAD, 5-ccc.log10pvalue, 6-ccc.log2FC
+    plot_width <- c(6,4,8,6,6,6)
+    plot_height <- c(9.5, 9.5, 9.5, 9.5, 9.5, 9.5)
+    mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(2,4,6)],brewer.pal(n = 8, name = "Oranges")[6])
+    df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 2){lvs <- c("CVAE1-10","MAF")}
+      else{lvs <- c("CVAE1-1", "CVAE1-5", "CVAE1-10","MAF")}
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="CVA"){res$modeltype[i] <- "VAEs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs"))
+      res$ccc_pos[res$ccc_pos<0 | is.na(res$ccc_pos)] <- 0
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res$ccc_log10pvalue[res$ccc_log10pvalue < 0 | is.na(res$ccc_log10pvalue)] <- 0
+      res$ccc_log2FC[res$ccc_log2FC < 0 | is.na(res$ccc_log2FC)] <- 0
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ','DESeq'))}
+      res <- tidyr::pivot_longer(res, cols = c("ccc_log10pvalue", "ccc_log2FC","ARI", "succ_prop","ccc_pos"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_pos","ccc_log10pvalue", "ccc_log2FC"),
+                           labels = c("1 - Pct(0-markers)", "ARI","CCCPCC", "CCC of -log10(pvalue)", "CCC of log2FC"))
+      return(res)
+    }
+    
+    heatmap_proc <- function(res){
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 2){lvs <- c("CVAE1-10","MAF")}
+      else{lvs <- c("CVAE1-1", "CVAE1-5", "CVAE1-10","MAF")}
+      res$model <- factor(model, levels = lvs)
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="CVA"){res$modeltype[i] <- "VAEs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs"))
+      res <- res %>% group_by(pilot_size, model, modeltype) %>%
+        summarise(
+          Mean = mean(ks_mean,na.rm=TRUE),
+          Sd = mean(ks_sd,na.rm=TRUE),
+          Sparsity = mean(ks_zero,na.rm=TRUE)
+        )
+      
+      res <- tidyr::pivot_longer(res, cols = c("Mean", "Sd", "Sparsity"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = (c("Mean", "Sd", "Sparsity")), labels = c("MAD(Mean)","MAD(SD)","MAD(Sparsity)"))
+      res$text <- round(res$Rate, 3)
+      res$text[res$Rate > 6 | is.na(res$Rate)] <- ">6"
+      res$Rate[res$Rate > 6 | is.na(res$Rate)] <- 6
+      res$modelorder <- factor(res$model, levels=rev(levels(res$model)))
+      res$modeltype <- "All models"
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ','DESeq'))}
+      return(res)
+    }
+  }
+  # Step 3: make graphs  ####
+  gg_default <- function(p){
+    pp <- p +
+      theme(legend.position = "bottom")+
+      # guides(fill=guide_legend(nrow = 1,byrow = TRUE))+
+      theme(strip.text.x = element_text(face = "bold", size = 12),
+            strip.text.y = element_text(face = "bold", size = 10),
+            legend.title=element_text(size = 10), 
+            legend.text=element_text(size = 9),
+            axis.text = element_text(size = 10),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank())
+    return(pp)
+  }
+  #### p11 overall boxplot ####
+  res <- df_proc(overall)
+  p11 <- ggplot(data = res)+ 
+    geom_violin(aes(x = pilot_size, y = Rate, fill = model), position = position_dodge(0.6), width=1)+
+    # geom_boxplot(aes(x = pilot_size, y = Rate, fill = model), show.legend = T, width = 0.15,position = position_dodge(0.9))+
+    facet_grid(row = vars(Metric), col = vars(modeltype))+
+    theme_bw()+
+    labs(x = "Pilot size", y = "", switch = "y", fill = "Models")+
+    scale_fill_manual(values = mycolors)+
+    theme(panel.border = element_rect(colour = "black", fill = NA))+
+    ylim(0,1)+
+    guides(fill=guide_legend(nrow = 1,byrow = TRUE))
+  if(dataname %in% c("SKCM","BRCA","SKCMLAML")){
+    p11 <- p11+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+  }
+  else{
+    p11 <- p11+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  }
+  pdf(file = paste(default, dataname, ".pdf", sep = ""), width = plot_width[1], height = plot_height[1])
+  print(gg_default(p11))
+  dev.off()
+  #### p12 overall heatmap ####
+  res <- heatmap_proc(overall)
+  p12 <- ggplot(res, aes(x = pilot_size , y = modelorder, fill = Rate)) + 
+    geom_tile(show.legend = T)+
+    labs(y = "",x = "Pilot size", fill = "MAD")+
+    facet_nested(Metric~modeltype)+
+    geom_text(aes(pilot_size, modelorder, label = text), color = "black", size = 4) +
+    theme_minimal()+
+    # scale_y_discrete(position = "left", labels=c( "Mean" = "MAD(Mean)", "Sd" = "MAD(SD)", "Sparsity" = "MAD(Sparsity)"))+
+    scale_fill_gradientn(colours = terrain.colors(10))+
+    theme(axis.text.y = element_text(angle = 0, hjust = 1, colour = "black", size = 8))+
+    theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_blank())
+  pdf(file = paste(default, dataname, "_MAD.pdf", sep = ""), width = plot_width[2], height = plot_height[2])
+  print(gg_default(p12))
+  dev.off()
+  
+  #### p21 offline violine plot####
+  res <- df_proc(offline)
+  p21 <- ggplot(data = res, aes(x = pilot_size, y = Rate))+
+    geom_violin(aes(color = offline), show.legend = T, position = position_dodge(0.9)) +
+    geom_boxplot(aes(color = offline), width = 0.15, position = position_dodge(0.9)) +
+    facet_grid(cols=vars(model), rows= vars(Metric), scale = "free_y")+
+    theme_bw()+
+    labs(x="Pilot size", y="", color = "Offline")+
+    scale_y_continuous(position = "left")+
+    theme(strip.background = element_blank(),
+          panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_color_npg()+
+    ylim(0,1)
+  if(dataname %in% c("SKCM","BRCA","SKCMLAML")){
+    p21 <- p21+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+  }
+  else{
+    p21 <- p21+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  }
+  pdf(file = paste(default, dataname, "_Offline.pdf", sep = ""), width = plot_width[3], height = plot_height[3])
+  print(gg_default(p21))
+  dev.off()
+  
+  
+  #### p3 batch sina plot ####
+  res <- df_proc(batch)
+  res$batch_size <- paste(res$batch_frac, "of pilot size")
+  p3 <- ggplot(res[res$batch_frac!= "50%",])+ 
+    # geom_sina(aes(x = pilot_size, y = Rate, color = batch_frac), show.legend = T)+
+    geom_violin(aes(x = pilot_size, y = Rate, color = batch_size), show.legend = T, position = position_dodge(0.9)) +
+    geom_boxplot(aes(x = pilot_size, y = Rate, color = batch_size), width = 0.15, position = position_dodge(0.9)) +
+    facet_nested(Metric~model)+
+    theme_bw()+
+    labs(x="Pilot size", y="", color = "Batch size")+
+    scale_y_continuous(position = "left")+
+    theme(panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_color_npg()+
+    ylim(0,1)
+  if(dataname %in% c("SKCM","BRCA","SKCMLAML")){
+    p3 <- p3+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+  }
+  else{
+    p3 <- p3+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  }
+  pdf(file = paste(default, dataname, "_Batch.pdf", sep = ""), width = plot_width[4], height = plot_height[4])
+  print(gg_default(p3))
+  dev.off()
+  
+  #### p4 epoch line plot ####
+  # if(cancer_type == 1){lvs <- c("VAE1-10","MAF","WGANGP")}
+  # else{lvs <- c("CVAE1-10","MAF")}
+  # epoch$model <- factor(epoch$modelname, levels = lvs)
+  # res <- epoch %>% group_by(model, pilot_size, epoch) %>%
+  #   summarise(
+  #     sd_ccc_pos = sd(ccc_pos,na.rm = T),
+  #     mean_ccc_pos = mean(ccc_pos,na.rm = T),
+  #     sd_ARI = sd(ARI,na.rm = T),
+  #     mean_ARI = mean(ARI,na.rm = T),
+  #   )
+  # 
+  # res_sd <- tidyr::pivot_longer(res, cols = c("sd_ccc_pos", "sd_ARI"), names_to = "Metric", values_to = "Sd")
+  # res_sd <- data.frame(model = res_sd$model,pilot_size = res_sd$pilot_size, epoch = res_sd$epoch,
+  #                      Metric = substr(res_sd$Metric, 4, 10), Sd = res_sd$Sd)
+  # res_mean <- tidyr::pivot_longer(res, cols = c("mean_ccc_pos", "mean_ARI"), names_to = "Metric", values_to = "Mean")
+  # res_mean <- data.frame(model = res_mean$model,pilot_size = res_mean$pilot_size, epoch = res_mean$epoch,
+  #                        Metric = substr(res_mean$Metric, 6, 15), Mean = res_mean$Mean)
+  # res <- inner_join(res_sd, res_mean, by = c("model","epoch","pilot_size","Metric"))
+  # res$Metric <- factor(res$Metric, levels = c("ccc_pos","ARI"),
+  #                      labels = c("CCC of PCC", "cARI"))
+  # p4 <- ggplot(res, aes(x = pilot_size, y = Mean, group = epoch, color = epoch))+ 
+  #   geom_errorbar(aes(ymin = Mean-Sd, ymax = Mean+Sd), width = 4) +
+  #   geom_line() + 
+  #   geom_point()+
+  #   theme_bw()+
+  #   facet_nested(Metric~model,scales = "free_y")+
+  #   labs(x="Pilot size", y="", color = "Epoch")+
+  #   scale_y_continuous(position = "left")+
+  #   theme(panel.border = element_rect(colour = "black", fill = NA),
+  #         axis.line = element_blank())+
+  #   scale_color_npg()
+  res <- df_proc(epoch)
+  p4 <- ggplot(res)+ 
+    geom_violin(aes(x = pilot_size, y = Rate, color = epoch), show.legend = T, position = position_dodge(0.9)) +
+    geom_boxplot(aes(x = pilot_size, y = Rate, color = epoch), width = 0.15, position = position_dodge(0.9)) +
+    facet_nested(Metric~model)+
+    theme_bw()+
+    labs(x="Pilot size", y="", color = "Epoch")+
+    scale_y_continuous(position = "left")+
+    theme(panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_color_npg()+
+    ylim(0,1)
+  if(dataname %in% c("SKCM","BRCA","SKCMLAML")){
+    p4 <- p4+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+  }
+  else{
+    p4 <- p4+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  }
+  pdf(file = paste(default, dataname, "_Epoch.pdf", sep = ""), width = plot_width[5], height = plot_height[5])
+  print(gg_default(p4))
+  dev.off()
+  
+  #### p5 normalization violin plot ####
+  res <- df_proc(norm)
+  p5 <- ggplot(data = res[res$normalization!="DESeq",])+
+    geom_violin(aes(x = pilot_size, y = Rate, fill = normalization ), position = position_dodge(0.9))+
+    facet_grid(rows = vars(Metric), cols = vars(model),scales = "free_y")+
+    theme_bw()+
+    labs(x="Pilot size", y="", fill="Normalization")+
+    scale_y_continuous(position = "left")+
+    theme(panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_fill_npg()+
+    ylim(0,1)
+  if(dataname %in% c("SKCM","BRCA","SKCMLAML")){
+    p5 <- p5+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+  }
+  else{
+    p5 <- p5+geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  }
+  pdf(file = paste(default, dataname, "_Normalization.pdf", sep = ""), width = plot_width[6], height = plot_height[6])
+  print(gg_default(p5))
+  dev.off()
+  
+}
+```
+
+
+#### For miRNA SKCM: Figure 2AC and Figure S1
+```{r}
+vis_all("SKCM", "skcm", 1)
+```
+
+#### For miRNA SKCM with marker filtering: Figure 2B, D-H
+```{r}
+vis_all("SKCMPositive_4", "skcm_pos", 1)
+
+```
+
+#### For miRNA BRCA: Figure S2
+```{r}
+vis_all("BRCA", "brca", 1)
+```
+
+#### For miRNA BRCA with marker filtering: Figure S3
+```{r}
+vis_all("BRCAPositive_3", "brca_pos", 1)
+```
+
+
+
+
+#### For miRNA two group SKCMLAML with marker filtering: Figure 3AB, Figure S5
+```{r}
+vis_all("SKCMLAMLPositive_3", "skcmlaml_pos", 2)
+```
+
+#### For miRNA two group SKCMLAML with marker filtering: Figure 3CD
+
+To run this chunk, you need to have the SCMLAMLPositive_3.csv in /ReadData/ folder and the corresponding generated data in /GeneratedData/ for plotting the UMAP.
+```{r}
+selected_pilot <- c("20", "60", "100")
+selected_model <- c("CVAE1-10")
+g1 <- "SKCM"
+g2 <- "LAML"
+dataname <- "SKCMLAMLPositive_3"
+real <- read.csv(paste("RealData/", dataname, ".csv", sep = ""), header = T)
+n1 <- sum(real$groups==g1)
+n2 <- sum(real$groups==g2)
+real <- select_if(real, is.numeric)
+real <- log2(real + 1)
+
+umap_df <- data.frame(UMAP1 = NA, UMAP2 = NA, ID = NA, 
+                      groups = NA, datatype = NA, 
+                      pilot = NA, model = NA)
+for (pilot in selected_pilot) {
+  for(model in selected_model){
+    cat(paste(pilot, model))
+    file <- read.csv(paste("GeneratedData/", dataname, "_", model, "_", pilot, "_Draw1.csv" , sep = ""), header = F)
+    groups <- ifelse(file[,ncol(file)] == 0, g1, g2)
+    generated <- file[c(which(groups == g1)[1:n1], which(groups == g2)[1:n2]), 1:ncol(real)]
+    colnames(generated) <- colnames(real)
+    dat_combine <- rbind(real, generated)
+    df <- UMAP_eval(dat_combine, groups = rep(c(g1, g2), c(n1, n2)), log = TRUE, failure = "remove") 
+    df <- df$plot_df
+    df$pilot <- pilot
+    df$model <- model
+    umap_df <- as.data.frame(rbind(umap_df, df))
+  }
+}
+
+umap_df$pilot <- factor(umap_df$pilot, levels = selected_pilot)
+umap_df$model <- factor(umap_df$model, levels = selected_model)
+umap_df$Data <- paste(umap_df$groups, umap_df$datatype)
+
+umap_df <- as.data.frame(umap_df[-1,])
+umap_df$pilotsize <- factor(paste("Pilot size : ", umap_df$pilot, sep = ""), levels = paste("Pilot size : ", selected_pilot, sep = ""))
+umap_df$Data <- factor(umap_df$Data, levels = c("LAML real","LAML generated","SKCM real","SKCM generated"),
+                       labels=c("LAML real","LAML augmented","SKCM real","SKCM augmented"))
+umapp <- umap_df %>% ggplot(aes(x = UMAP1, y = UMAP2, color = Data))+
+  geom_point(size=1)+
+  theme(legend.position="bottom")+
+  facet_wrap(vars(pilotsize))+
+  labs(title="", x = "", y = "")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(legend.position = "bottom")+
+  scale_color_manual(values=c("deeppink1","pink","springgreen4","lightgreen"))
+
+  
+ggsave(paste(default, dataname, "_UMAP.pdf", sep = ""),
+       gg_default(umapp), width = 10, height=5, unit="in")
+
+```
+
+
+#### For miRNA two group SKMLAML: Figure S6
+```{r}
+vis_all("SKCMLAML", "skcmlaml", 2)
+```
+
+
+#### For miRNA single group LAML or PRAD under optimal settings: Figure S4
+
+```{r}
+ df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 3){lvs <- c("VAE1-10","MAF","WGANGP")}
+      else{lvs <- c("VAE1-1", "VAE1-5", "VAE1-10","RealNVP","GLOW","MAF","GAN", "WGAN", "WGANGP")}
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res$ccc_pos[res$ccc_pos<0 | is.na(res$ccc_pos)] <- 0
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res <- tidyr::pivot_longer(res, cols = c("ARI", "ccc_pos", "succ_prop"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_pos"),
+                           labels = c("1 - Pct(0-markers)", "cARI", "CCCPCC"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
+      return(res)
+    }
+load("FinalResAug2023/LAMLPositive_2_Optimal.RData")
+load("FinalResAug2023/PRADPositive_2_Optimal.RData")
+dataname <- "LAMLPositive_2_PRAD_Positive_3"
+res_laml <- df_proc(laml_pos_opt)
+res_prad <- df_proc(prad_pos_opt)
+res <- rbind(res_laml, res_prad)
+res$Cancer <- rep(c("LAML", "PRAD"), c(nrow(res_laml), nrow(res_prad)))
+
+mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(6)], brewer.pal(n = 8, name = "Oranges")[c(6)], brewer.pal(n = 8, name = "Greens")[c(6)])
+p <- ggplot(data = res) + 
+  geom_violin(aes(x = pilot_size, y = Rate, fill = model), position = position_dodge(0.6))+
+  # geom_boxplot(aes(x = pilot_size, y = Rate, fill = model), show.legend = T, width = 0.6)+
+  facet_grid(row = vars(Metric), col = vars(Cancer))+
+  theme_bw()+
+  labs(x = "Pilot size", y = "", switch = "y", fill = "Models")+
+  scale_fill_manual(values = mycolors)+
+  theme(panel.border = element_rect(colour = "black", fill = NA))+
+  theme(legend.position = "bottom")+
+  ylim(0,1)+
+  geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+
+pdf(file = paste("FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
+print(gg_default(p))
+dev.off()
+```
+
+
+#### For miRNA two group BRCAPRAD under optimal settings: Figure S7
+```{r}
+    df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 2){lvs <- c("CVAE1-10","MAF")}
+      else{lvs <- c("CVAE1-1", "CVAE1-5", "CVAE1-10","MAF")}
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="CVA"){res$modeltype[i] <- "VAEs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs"))
+      res$ccc_pos[res$ccc_pos<0 | is.na(res$ccc_pos)] <- 0
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res$ccc_log10pvalue[res$ccc_log10pvalue < 0 | is.na(res$ccc_log10pvalue)] <- 0
+      res$ccc_log2FC[res$ccc_log2FC < 0 | is.na(res$ccc_log2FC)] <- 0
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ','DESeq'))}
+      res <- tidyr::pivot_longer(res, cols = c("ccc_log10pvalue", "ccc_log2FC","ARI", "succ_prop","ccc_pos"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_pos","ccc_log10pvalue", "ccc_log2FC"),
+                           labels = c("1 - Pct(0-markers)", "ARI","CCCPCC", "CCC of -log10(pvalue)", "CCC of log2FC"))
+      return(res)
+    }
+load("FinalResAug2023/BRCAPRADPositive_3_Optimal.RData")
+dataname <- "BRCAPRADPositive_3"
+res <- df_proc(brcaprad_pos_opt)
+res$Cancer <- "BRCAPRAD"
+
+mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(6)], brewer.pal(n = 8, name = "Oranges")[c(6)], brewer.pal(n = 8, name = "Greens")[c(6)])
+p <- ggplot(data = res) + 
+  geom_violin(aes(x = pilot_size, y = Rate, fill = model), position = position_dodge(0.6))+
+  # geom_boxplot(aes(x = pilot_size, y = Rate, fill = model), show.legend = T, width = 0.6)+
+  facet_grid(row = vars(Metric), col = vars(Cancer))+
+  theme_bw()+
+  labs(x = "Pilot size", y = "", switch = "y", fill = "Models")+
+  scale_fill_manual(values = mycolors)+
+  theme(panel.border = element_rect(colour = "black", fill = NA))+
+  theme(legend.position = "bottom")+
+  ylim(0,1)+
+  geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+
+pdf(file = paste("FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
+print(gg_default(p))
+dev.off()
+```
+
+## RNA results visualization
+```{r}
+vis_all_RNA <- function(dataname, nickname, cancer_type = c(1, 2)){
+  # This function visualization the results of DGM evaluation
+  # dataname = "RNABRCAPositive_5-2", nickname = "rnabrca_pos", cancer_type = 1
+  
+  # Step1: load data ####
+  default <- "~/Library/Mobile Documents/com~apple~CloudDocs/PhD/Interns/2021 Summer/Generative Models/DGMmicroRNA/FinalResAug2023/"
+  load(paste(default, dataname, ".RData", sep = ""))
+  load(paste(default, dataname, "_Gaussianhead.RData", sep = ""))
+  load(paste(default, dataname, "_Normalization.RData", sep = ""))
+  overall <- get(nickname)
+  offline <- get(paste(nickname, "_Gaussianhead", sep = ""))
+  norm <- get(paste(nickname, "_norm", sep = ""))
+  
+  # Step2: generate dataframes for plotting  ####
+  if(cancer_type == 1){
+    # Evaluation criteria: 1-Prop.successful.genes, 2-CCC.pos.control, 3-cARI, 4-MAD
+    mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(6)], brewer.pal(n = 8, name = "Oranges")[c(6)], brewer.pal(n = 8, name = "Greens")[c(6)])
+    plot_width <- c(6, 9, 6, 4)
+    plot_height <- c(4, 4, 4, 4)
+    df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      lvs <- c("VAE1-100","MAF","WGANGP")
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res <- tidyr::pivot_longer(res, cols = c("ARI",  "succ_prop"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI"),
+                           labels = c("1 - Pct(0-markers)", "cARI"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
+      return(res)
+    }
+    heatmap_proc <- function(res){
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      lvs <- c("VAE1-100","MAF","WGANGP")
+      res$model <- factor(model, levels = lvs)
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res <- res %>% group_by(pilot_size, model, modeltype) %>%
+        summarise(
+          Mean = mean(ks_mean,na.rm=TRUE),
+          Sd = mean(ks_sd,na.rm=TRUE),
+          Sparsity = mean(ks_zero,na.rm=TRUE)
+        )
+      
+      res <- tidyr::pivot_longer(res, cols = c("Mean", "Sd", "Sparsity"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = (c("Sparsity","Sd", "Mean")), labels = c("MAD(Sparsity)","MAD(SD)","MAD(Mean)"))
+      res$text <- round(res$Rate, 3)
+      res$text[res$Rate > 6 | is.na(res$Rate)] <- ">6"
+      res$Rate[res$Rate > 6 | is.na(res$Rate)] <- 6
+      res$modelorder <- factor(res$model, levels=rev(levels(res$model)))
+      res$modeltype <- "All models"
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ','DESeq'))}
+      return(res)
+    }
+  }
+  else{
+    # Evaluation criteria: 1-Prop.successful.genes, 2-CCC.pos.control, 3-ARI, 4-MAD, 5-ccc.log10pvalue, 6-ccc.log2FC
+    plot_width <- c(4,6,4,4)
+    plot_height <- c(8,4,8,8)
+    mycolors <- c(brewer.pal(n = 8, name = "Blues")[c(6)],brewer.pal(n = 8, name = "Oranges")[6])
+    df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      lvs <- c("CVAE1-100","MAF")
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="CVA"){res$modeltype[i] <- "VAEs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','UQ','TMM'))}
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res$ccc_log10pvalue[res$ccc_log10pvalue<0 | is.na(res$ccc_log10pvalue)] <- 0
+      res$ccc_log2FC[res$ccc_log2FC<0 | is.na(res$ccc_log2FC)] <- 0
+      res <- tidyr::pivot_longer(res, cols = c("ccc_log10pvalue", "ccc_log2FC","ARI", "succ_prop"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_log10pvalue", "ccc_log2FC"),
+                           labels = c("1 - Pct(0-markers)",  "ARI","CCC of -log10(pvalue)", "CCC of log2FC"))
+      return(res)
+    }
+    
+    heatmap_proc <- function(res){
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      lvs <- c("CVAE1-100","MAF")
+      res$model <- factor(model, levels = lvs)
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="CVA"){res$modeltype[i] <- "VAEs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs"))
+      res <- res %>% group_by(pilot_size, model, modeltype) %>%
+        summarise(
+          Mean = mean(ks_mean,na.rm=TRUE),
+          Sd = mean(ks_sd,na.rm=TRUE),
+          Sparsity = mean(ks_zero,na.rm=TRUE)
+        )
+      
+      res <- tidyr::pivot_longer(res, cols = c("Mean", "Sd", "Sparsity"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = (c("Sparsity","Sd", "Mean")), labels = c("MAD(Sparsity)","MAD(SD)","MAD(Mean)"))
+      res$text <- round(res$Rate, 3)
+      res$text[res$Rate > 6 | is.na(res$Rate)] <- ">6"
+      res$Rate[res$Rate > 6 | is.na(res$Rate)] <- 6
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','UQ','TMM',"DESeq"))}
+      return(res)
+    }
+  }
+  # Step 3: make graphs  ####
+  gg_default <- function(p){
+    pp <- p +
+      theme(legend.position = "bottom")+
+      theme(strip.text.x = element_text(face = "bold", size = 12),
+            strip.text.y = element_text(face = "bold", size = 10),
+            legend.title=element_text(size = 10), 
+            legend.text=element_text(size = 9),
+            axis.text = element_text(size = 12),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank())
+    return(pp)
+  }
+  #### p11 overall boxplot ####
+  res <- df_proc(overall)
+  p11 <- ggplot(data = res[res$pilot_size %in% c("50","150","250"),])+ 
+    geom_violin(aes(x = pilot_size, y = Rate, fill = model), show.legend = T, position = position_dodge(0.9))+
+    facet_grid(row = vars(Metric), col = vars(modeltype))+
+    theme_bw()+
+    labs(x = "Pilot size", y = "", switch = "y", fill = "Models")+
+    scale_fill_manual(values = mycolors)+
+    theme(panel.border = element_rect(colour = "black", fill = NA))+
+    guides(fill=guide_legend(nrow = 1,byrow = TRUE))+
+    ylim(0,1)+
+    geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  
+  pdf(file = paste(default, dataname, ".pdf", sep = ""), width = plot_width[1], height = plot_height[1])
+  print(gg_default(p11))
+  dev.off()
+  #### p12 overall heatmap ####
+  res <- heatmap_proc(overall)
+  p12 <- ggplot(res[res$pilot_size %in% c("50","150","250"),], aes(x = pilot_size , y = Metric, fill = Rate)) + 
+    geom_tile(show.legend = T)+
+    labs(y = "",x = "Pilot size", fill = "MAD")+
+    facet_wrap(vars(model), dir = "h")+
+    geom_text(aes(pilot_size, Metric, label = text), color = "black", size = 4) +
+    theme_minimal()+
+    scale_fill_gradientn(colours = terrain.colors(10))+
+    theme(axis.text.y = element_text(angle = 0, hjust = 1, colour = "black", size = 10, face = "bold"))+
+    theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_blank())
+  pdf(file = paste(default, dataname, "_MAD.pdf", sep = ""), width = plot_width[2], height = plot_height[2])
+  print(gg_default(p12))
+  dev.off()
+  
+  #### p2 offline violine plot####
+  res <- df_proc(offline)
+  p2 <- ggplot(data = res, aes(x = pilot_size, y = Rate))+
+    geom_violin(aes(color = offline), show.legend = T, position = position_dodge(0.9)) +
+    geom_boxplot(aes(color = offline), width = 0.15, position = position_dodge(0.9)) +
+    facet_grid(cols=vars(model), rows= vars(Metric), scale = "free_y")+
+    theme_bw()+
+    labs(x="Pilot size", y="", color = "Offline")+
+    scale_y_continuous(position = "left")+
+    theme(strip.background = element_blank(),
+          panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_color_npg()+
+    ylim(0,1)+
+    geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  
+  pdf(file = paste(default, dataname, "_Offline.pdf", sep = ""), width = plot_width[3], height = plot_height[3])
+  print(gg_default(p2))
+  dev.off()
+  
+  #### p3 normalization violin plot ####
+  res <- df_proc(norm)
+  p3 <- ggplot(data = res[res$normalization!="DESeq",])+
+    geom_violin(aes(x = pilot_size, y = Rate, fill = normalization ), position = position_dodge(0.9))+
+    facet_grid(rows = vars(Metric), cols = vars(model),scales = "free_y")+
+    theme_bw()+
+    labs(x="Pilot size", y="", fill="Normalization")+
+    scale_y_continuous(position = "left")+
+    theme(panel.border = element_rect(colour = "black", fill = NA),
+          axis.line = element_blank())+
+    scale_fill_npg()+
+    ylim(0,1)+
+    geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+  
+  pdf(file = paste(default, dataname, "_Normalization.pdf", sep = ""), width = plot_width[4], height = plot_height[4])
+  print(gg_default(p3))
+  dev.off()
+  
+}
+```
+
+#### For RNA single group BRCA or PRAD: Figure 4
+```{r}
+vis_all_RNA("RNABRCAPositive_5-2", "rnabrca_pos", 1)
+vis_all_RNA("RNAPRADPositive_5-2", "rnaprad_pos", 1)
+```
+#### For RNA two group BRCAPRAD: Figure S8
+```{r}
+vis_all_RNA("RNABRCAPRADPositive_5-2", "rnabrcaprad_pos", 2)
+```
+
+
+## Transfer learning results visualization: Figure 5
+```{r}
+ df_proc <- function(res){
+      res$succ_prop <- 1 - res$fail_prop
+      res$pilot_size <- factor(res$pilot_size, levels = as.character(sort(as.numeric(as.character(unique(res$pilot_size))))))
+      if("modelname" %in% colnames(res)){model <- res[,"modelname"]}
+      else{model <- res[,"model"]}
+      if(length(unique(model)) <= 3){lvs <- c("VAE1-10","MAF","WGANGP")}
+      else{lvs <- c("VAE1-1", "VAE1-5", "VAE1-10","RealNVP","GLOW","MAF","GAN", "WGAN", "WGANGP")}
+      res$model <- factor(model, levels = lvs)
+      res$modeltype <- rep(NA, nrow(res))
+      for (i in 1:nrow(res)) {
+        if(substr(res$model[i], 1,3)=="VAE"){res$modeltype[i] <- "VAEs"}
+        else if(substr(res$model[i], 1,3) %in% c("GAN", "WGA")){res$modeltype[i] <- "GANs"}
+        else{res$modeltype[i] <- "FLOWs"}
+      }
+      res$modeltype <- factor(res$modeltype, levels = c("VAEs","FLOWs","GANs"))
+      res$ccc_pos[res$ccc_pos<0 | is.na(res$ccc_pos)] <- 0
+      res$ARI[res$ARI<0 | is.na(res$ARI)] <- 0
+      res <- tidyr::pivot_longer(res, cols = c("ARI", "ccc_pos", "succ_prop"), names_to = "Metric", values_to = "Rate")
+      res$Metric <- factor(res$Metric, levels = c("succ_prop","ARI","ccc_pos"),
+                           labels = c("1 - Pct(0-markers)", "cARI", "CCCPCC"))
+      if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
+      return(res)
+    }
+load("FinalResAug2023/SKCM_Transfer.RData")
+load("FinalResAug2023/BRCA_Transfer.RData")
+skcm_transfer <- skcm_transfer[skcm_transfer$modelname == "VAE1-10",]
+brca_transfer <- brca_transfer[brca_transfer$modelname == "VAE1-10",]
+res1 <- df_proc(skcm_transfer)
+res2 <- df_proc(brca_transfer)
+res1$cancer = "miRNA-SKCM"
+res2$cancer = "miRNA-BRCA"
+res <- rbind(res1, res2)
+res$cancer <- factor(res$cancer, levels = c("miRNA-SKCM","miRNA-BRCA"))
+dataname <- "miRNA_Transfer"
+res$transfer <- factor(res$transfer, levels = c("Original","transfromLAML","transfromLAMLBRCAPRAD","transfromPRAD","transfromSKCMLAMLPRAD"), 
+                       labels = c("None", "fromLAML","fromLAMLBRCAPRAD","fromPRAD","fromSKCMLAMLPRAD"))
+p <- ggplot(data = res) + 
+  geom_boxplot(aes(x = pilot_size, y = Rate, fill = transfer), show.legend = T, width = 0.6)+
+  facet_grid(col = vars(cancer), row = vars(Metric))+
+  theme_bw()+
+  labs(x = "Pilot size", y = "", switch = "y", fill = "Transfer")+
+  scale_color_npg()+
+  theme(panel.border = element_rect(colour = "black", fill = NA))+
+  theme(legend.position = "bottom")+
+  geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
+
+pdf(file = paste("FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
+print(gg_default(p))
+dev.off()
+
+
+#RNA transfer
+load("FinalResAug2023/RNABRCASPLIT_Transfer.RData")
+load("FinalResAug2023/RNAPRADSPLIT_Transfer.RData")
+
+rnares1 <- df_proc(rnabrca_transfer)
+rnares2 <- df_proc(rnaprad_transfer)
+rnares1$cancer = "RNABRCA"
+rnares2$cancer = "RNAPRAD"
+rnares1$transfer <- ifelse(rnares1$transfer== "Original", "None", "fromRNAPRAD")
+rnares2$transfer <- ifelse(rnares2$transfer== "Original", "None", "fromRNABRCA")
+dataname = "RNA_Transfer"
+rnares = rbind(rnares1, rnares2)
+rnares$transfer <- factor(rnares$transfer, levels = c("None", "fromRNAPRAD","fromRNABRCA"))
+prna <- ggplot(data = rnares) + 
+  geom_boxplot(aes(x = pilot_size, y = Rate, fill = transfer), show.legend = T, width = 0.6)+
+  facet_grid(col = vars(cancer), row = vars(Metric))+
+  theme_bw()+
+  labs(x = "Pilot size", y = "", switch = "y", fill = "Transfer")+
+  scale_color_npg()+
+  theme(panel.border = element_rect(colour = "black", fill = NA))+
+  theme(legend.position = "bottom")+
+  geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
+
+pdf(file = paste("FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
+print(gg_default(prna))
+dev.off()
+```
+
