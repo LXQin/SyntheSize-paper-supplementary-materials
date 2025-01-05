@@ -104,7 +104,7 @@ vis_all <- function(dataname, nickname, cancer_type = c(1, 2)){
   
 
   # Step1: load data ####
-  default <- "FinalResAug2023/"
+  default <- "../FinalResAug2023/"
   load(paste(default, dataname, ".RData", sep = ""))
   load(paste(default, dataname, "_AEhead.RData", sep = ""))
   load(paste(default, dataname, "_Normalization.RData", sep = ""))
@@ -547,8 +547,8 @@ vis_all("SKCMLAML", "skcmlaml", 2)
       if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
       return(res)
     }
-load("FinalResAug2023/LAMLPositive_2_Optimal.RData")
-load("FinalResAug2023/PRADPositive_2_Optimal.RData")
+load("../FinalResAug2023/LAMLPositive_2_Optimal.RData")
+load("../FinalResAug2023/PRADPositive_2_Optimal.RData")
 dataname <- "LAMLPositive_2_PRAD_Positive_3"
 res_laml <- df_proc(laml_pos_opt)
 res_prad <- df_proc(prad_pos_opt)
@@ -568,7 +568,7 @@ p <- ggplot(data = res) +
   ylim(0,1)+
   geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
 
-pdf(file = paste("FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
+pdf(file = paste("../FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
 print(gg_default(p))
 dev.off()
 ```
@@ -600,7 +600,7 @@ dev.off()
                            labels = c("1 - Pct(0-markers)", "ARI","CCCPCC", "CCC of -log10(pvalue)", "CCC of log2FC"))
       return(res)
     }
-load("FinalResAug2023/BRCAPRADPositive_3_Optimal.RData")
+load("../FinalResAug2023/BRCAPRADPositive_3_Optimal.RData")
 dataname <- "BRCAPRADPositive_3"
 res <- df_proc(brcaprad_pos_opt)
 res$Cancer <- "BRCAPRAD"
@@ -618,7 +618,7 @@ p <- ggplot(data = res) +
   ylim(0,1)+
   geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
 
-pdf(file = paste("FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
+pdf(file = paste("../FinalResAug2023/", dataname, "_Optimal.pdf", sep = ""), width = 8, height = 9)
 print(gg_default(p))
 dev.off()
 ```
@@ -630,7 +630,7 @@ vis_all_RNA <- function(dataname, nickname, cancer_type = c(1, 2)){
   # dataname = "RNABRCAPositive_5-2", nickname = "rnabrca_pos", cancer_type = 1
   
   # Step1: load data ####
-  default <- "~/Library/Mobile Documents/com~apple~CloudDocs/PhD/Interns/2021 Summer/Generative Models/DGMmicroRNA/FinalResAug2023/"
+  default <- "../FinalResAug2023/"
   load(paste(default, dataname, ".RData", sep = ""))
   load(paste(default, dataname, "_Gaussianhead.RData", sep = ""))
   load(paste(default, dataname, "_Normalization.RData", sep = ""))
@@ -875,8 +875,8 @@ vis_all_RNA("RNABRCAPRADPositive_5-2", "rnabrcaprad_pos", 2)
       if("normalization" %in% colnames(res)){res$normalization <- factor(res$normalization, levels=c('None','TC','TMM','UQ'))}
       return(res)
     }
-load("FinalResAug2023/SKCM_Transfer.RData")
-load("FinalResAug2023/BRCA_Transfer.RData")
+load("../FinalResAug2023/SKCM_Transfer.RData")
+load("../FinalResAug2023/BRCA_Transfer.RData")
 skcm_transfer <- skcm_transfer[skcm_transfer$modelname == "VAE1-10",]
 brca_transfer <- brca_transfer[brca_transfer$modelname == "VAE1-10",]
 res1 <- df_proc(skcm_transfer)
@@ -898,14 +898,14 @@ p <- ggplot(data = res) +
   theme(legend.position = "bottom")+
   geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=0.85), aes(yintercept = y), linetype = "dashed")
 
-pdf(file = paste("FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
+pdf(file = paste("../FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
 print(gg_default(p))
 dev.off()
 
 
 #RNA transfer
-load("FinalResAug2023/RNABRCASPLIT_Transfer.RData")
-load("FinalResAug2023/RNAPRADSPLIT_Transfer.RData")
+load("../FinalResAug2023/RNABRCASPLIT_Transfer.RData")
+load("../FinalResAug2023/RNAPRADSPLIT_Transfer.RData")
 
 rnares1 <- df_proc(rnabrca_transfer)
 rnares2 <- df_proc(rnaprad_transfer)
@@ -926,7 +926,7 @@ prna <- ggplot(data = rnares) +
   theme(legend.position = "bottom")+
   geom_hline(data = data.frame(Metric = "1 - Pct(0-markers)",y=1), aes(yintercept = y), linetype = "dashed")
 
-pdf(file = paste("FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
+pdf(file = paste("../FinalResAug2023/", dataname, ".pdf", sep = ""), width = 8, height = 8)
 print(gg_default(prna))
 dev.off()
 ```
