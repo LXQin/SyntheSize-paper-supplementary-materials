@@ -1,0 +1,518 @@
+---
+title: "Organization of TCGA Datasets"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+### Description of this file
+
+The DataOrganization.Rmd is used to download TCGA data using TCGAbiolinks package, process the downloaded data into formatted counts and save them as .csv file. In each .csv file, genes are columns, samples are rows. The .csv file also have extra columns such as "samples" for sample name, "groups" for two cancer type labels. 
+
+This file aims to generate 
+
+1. Cancer.csv:  n_sample * (n_genes + 1)  or n_sample * (n_genes + 2) with 1=samples, 2=samples & groups.
+
+2. CancerPositive_thres.csv: n_positive_samples * (n_genes + 1)  or n_positive_samples * (n_genes + 2). Positive genes are selected based on their mean log2 counts.
+
+3. Cancer_NormMethod.csv: same as Cancer.csv but with different normalization methods.
+
+4. CancerPositive_thres_NormMethod.csv: same as CancerPositive_thres.csv but with different normalization methods.
+
+where Cancer = "SKCM", "LAML", "BRCA", "PRAD", "SKCMLAML", "BRCAPRAD".
+ 
+```{r, Library packages}
+library(TCGAbiolinks)
+library(tidyverse)
+library(DANA)
+library(SummarizedExperiment)
+```
+
+```{r, Set file source location as working directory}
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+```{r, Download TCGA data using TCGAbiolinks, eval = F}
+cancer <- "LAML"
+cancer <- "SKCM"
+cancer <- "BRCA"
+cancer <- "PRAD"
+mirna_query <- GDCquery(project = paste("TCGA-", cancer, sep = ""),
+                  data.category = "Transcriptome Profiling",
+                  data.type = "miRNA Expression Quantification",
+                  legacy = FALSE)
+clinical_query <- GDCquery(project = paste("TCGA-", cancer, sep = ""),
+                  data.category = "Clinical",
+                  legacy = FALSE)
+rna_query <- GDCquery(project = paste("TCGA-", cancer, sep = ""),
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification",
+                      workflow.type = "STAR - Counts",
+                      legacy = FALSE)
+
+GDCdownload(mirna_query)
+experiment <- GDCprepare(mirna_query)
+data <- assay(experiment)
+write.csv(data, file = paste("../RealData/TCGA-", cancer, ".csv", sep = ""))
+```
+
+
+
+```{r, Define functions}
+
+# clean raw data for any cancer type, ie. LAML and SKCM 
+get_count_df <- function(cancer){
+  # This function clean the TCGA-cancer.csv file in ../RealData/ folder
+  # @param: cancer - character specifying cancer name, eg. "SKCM"
+  # @return: list contains df_count - count table with patient (not necessary) and Sample (unique) columns
+  #          mat_count - count table 
+  
+  cancer_ori <- read.csv(paste("../RealData/TCGA-",cancer,".csv",sep=""))
+  df_sub <- select(cancer_ori, -contains("million"))
+  df_sub <- select(df_sub, -contains("mapped"))
+  colnames(df_sub) <-  sub("read_count_", "", colnames(df_sub))
+  tryCatch({df_sub <- select(df_sub,-"X")}, 
+           error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+  df_count <- as.data.frame(t(select_if(df_sub, is.numeric)))
+  colnames(df_count) <- df_sub$miRNA_ID
+  # patients may be the same, but related to different sample id.
+  df_count$patient  <- sapply(rownames(df_count),function(x){
+    paste(strsplit(x,"\\.")[[1]][1:3],collapse="-")})
+  df_count$Sample <- rownames(df_count)
+  return(list(df_count = df_count, mat_count = Filter(is.numeric, df_count)))
+}
+
+# combine two cancer types and add cancer type label groups
+get_combine_count_df <- function(df_count_1, df_count_2, group_name){
+  # This function combines two cancer count into one and add type labels
+  # @param: df_count_1 -  count table with patient and Sample for cancer type 1 
+  # @param: df_count_2 -  count table with patient and Sample for cancer type 2 
+  # @param: group_name - vector contains the two levels of group
+  # @return: count_list - a list including df_count and mat_count for combined two cancer types
+  
+  features <- colnames(df_count_1)
+  df_count <- as.data.frame(rbind(df_count_1, df_count_2[,features]))
+  df_count <- Filter(is.numeric, df_count)
+  df_count$groups <- rep(group_name, c(nrow(df_count_1), nrow(df_count_2)))
+  mat_count <- select_if(df_count, is.numeric)
+  return(list(df_count = df_count, mat_count = mat_count))
+}
+
+# get positive control datasets for any count table
+get_count_positive_df <- function(count_list, thres, poly = F, coords = NULL, plot = T){
+  # This function filter positive control genes, positive means mean(log2(count+1)) for this gene is larger than some threshold
+  # @param: count_list - a list including df_count and mat_count, result from get_count_df()
+  # @param: thres - threshold for positive control genes, in log2 scale
+  # @param: poly - whether to use polycistronic clusters in defining the positive control features
+  # @param: coords - coordinates data frame based on miRBase miRNA definitions, must provide when poly is TRUE
+  # @return: a list containing df_count and mat_count but with positive control genes as columns.
+  df_count <- count_list$df_count
+  mat_count <- count_list$mat_count
+  thres_plot <- thres
+  
+  gene_means <- apply(mat_count, 2, function(x){mean(log2(x+1))})
+  gene_stds <- apply(mat_count, 2, function(x){sd(log2(x+1))})
+  
+  if(poly){
+    clusters <- DANA::defineClusters(genes = coords$name, chr = coords$chr, 
+                                     pos = (coords$start + coords$end)/2)
+    features_pos <- DANA::defineControls(raw = t(mat_count), 
+                                         tZero = 0, tPoor = thres-1, tWell = thres,
+                                         clusters = clusters)$posControls
+    thres_plot <- log2(thres+1)
+  }
+  else{
+    features_pos <- colnames(mat_count)[gene_means >= thres]
+  }
+  
+  mat_count_pos <- mat_count[, features_pos]
+  df_count_pos <- data.frame(mat_count_pos, select_if(df_count, ~!is.numeric(.x)))
+  
+   if(plot){
+    p <- ggplot(data.frame(gene_means, gene_stds))+
+    geom_point(aes(x = gene_means, y = gene_stds, color = gene_means), alpha = .4, show.legend = F)+
+    scale_color_gradient(low = "#0091ff", high = "#f0650e")+
+    geom_vline(xintercept = thres_plot, color = "red")+
+    labs(x = "mean(log2(count+1))", y = "sd(log2(count+1))",
+         title = paste("# of positive genes = ", length(features_pos)))+
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+    print(p)
+  }
+  return(list(mat_count = mat_count_pos, df_count = df_count_pos))
+}
+
+get_count_positive_df_RNA <- function(cancer, thres_mean = 5, thres_sd = 2, plot = T){
+  ## This function get positive control genes from either TCGA-RNAcancer.csv or dataframe
+  # @param: cancer - either the name of cancer, e.g RNABRCA, or the dataframe with genes in rows.
+  # @param: thres_mean - filtering out genes with log2 mean lower than thres_mean
+  # @param: thres_sd - filtering out genes with log2 sd lower than thres_sd
+  # @param: plot -  logical, whether plot the log2 mean vs log2 sd
+  # @output: a dataframe with positive control genes in columns and samples in rows
+  if(!is.character(cancer)){
+    mat_count <- t(cancer)
+    cat(paste("Input data directly with dimension", ncol(cancer), " and sample size", nrow(cancer)))
+  }
+  else{
+     cancer_ori <- read.csv(paste("../RealData/TCGA-",cancer,".csv",sep=""), row.names = 1)
+     mat_count <- t(cancer_ori)
+  }
+ 
+
+  gene_means <- apply(mat_count, 2, function(x){mean(log2(x+1))})
+  gene_stds <- apply(mat_count, 2, function(x){sd(log2(x+1))})
+  features_pos <- colnames(mat_count)[gene_means > thres_mean & gene_stds > thres_sd]
+  mat_count_pos <- mat_count[, features_pos]
+  mat_count_pos <- as.data.frame(mat_count_pos)
+  mat_count_pos$samples <- rownames(mat_count)
+  if(plot){
+    p <- ggplot(data.frame(gene_means, gene_stds))+
+    geom_point(aes(x = gene_means, y = gene_stds, color = gene_means), alpha = .4, show.legend = F)+
+    scale_color_gradient(low = "#0091ff", high = "#f0650e")+
+    geom_vline(xintercept = thres_mean, color = "red")+
+    geom_hline(yintercept = thres_sd, color = "red")
+    labs(x = "mean(log2(count+1))", y = "sd(log2(count+1))",
+         title = paste("# of positive genes = ", length(features_pos)))+
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+    print(p)
+  }
+  return(mat_count_pos)
+}
+
+# check normalization performance of dataset and get normalized datasets
+check_norm <- function(dataname, selected = c("TMM", "DESeq", "PoissonSeq", "RUVr"), save = F){
+  # This function checks normalization of dataname and save the normalized counts as new csv files.
+  # @param: dataname - characters indicating dataname for csv file
+  # @param: selected - normalization names
+  # @param: save - whether or not to save the normalized datasets
+  # @return: a list of normalized counts
+  dat <- read.csv(paste("../RealData/", dataname, ".csv", sep=""))
+  count <- t(select_if(dat, is.numeric))
+  genes <- unlist(lapply(strsplit(rownames(count),"\\."), function(x){paste(x,collapse = "-")}))
+  samples <- dat$samples
+  colnames(count) <- samples
+  rownames(count) <- genes
+  if("groups" %in% colnames(dat)){groups <- dat$groups}
+  else{groups <- rep("Single", ncol(count))}
+  count_normed <- DANA::applyNormalization(data = count, groups = groups, method = selected)
+  sel_normed <- count_normed[selected]
+  for (dat_ind in 1:length(selected)) {
+    norm_name <- selected[dat_ind]
+    if(length(unique(groups)) > 1){
+      sel_normed[[dat_ind]] <- data.frame(t(sel_normed[[dat_ind]]), samples = samples, groups = groups)
+    }
+    else{sel_normed[[dat_ind]] <- data.frame(t(sel_normed[[dat_ind]]), samples = samples)}
+    if(save){
+      write.table(sel_normed[[dat_ind]], 
+              paste("../RealData/", dataname, "_", selected[dat_ind], ".csv", sep = ""), 
+              sep =",", row.names = F, col.names = T)
+    }
+  }
+  return(sel_normed)
+}
+```
+
+# miRNA SKCM single datasets generation
+
+### "SKCM.csv" : 452 * (1881+1)
+
+```{r, Generate SKCM.csv, eval=F}
+cancer <- "SKCM"
+count_list <- get_count_df(cancer = cancer)
+write.table(data.frame(count_list$mat_count, samples = count_list$df_count$Sample),
+            paste("../RealData/", cancer, ".csv", sep = ""), sep =",", 
+            row.names = F, col.names = T)
+```
+
+
+### "SKCM_NormMethod.csv": 3 * 452 * (1881+1) using normalized data
+
+```{r, Generate SKCM_NormMethod.csv, eval=F}
+dataname <- "SKCM"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+
+### "SKCMPositive_thres.csv": 452*(298+1), positive control genes using threshold thres
+```{r, Generate SKCMPositive_thres.csv, eval=F }
+cancer <- "SKCM"
+count_list <- get_count_df(cancer = cancer)
+thres <- 4
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$mat_count, samples = count_list_pos$df_count$Sample),
+            paste("../RealData/", cancer, "Positive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+### "SKCMPositive_thres_NormMethod.csv": 3 * 452 * (298+1) using normalized data
+
+```{r, Generate SKCM_NormMethod.csv, eval=F}
+dataname <- "SKCMPositive_4"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+# miRNA BRCA single datasets generation
+### "BRCA.csv" : 1207*(1881+1)
+
+```{r, Generate BRCA.csv, eval=F}
+cancer <- "BRCA"
+count_list <- get_count_df(cancer = cancer)
+write.table(data.frame(count_list$mat_count, samples = count_list$df_count$Sample),
+            paste("../RealData/", cancer, ".csv", sep = ""), sep =",", 
+            row.names = F, col.names = T)
+```
+
+
+### "BRCA_NormMethod.csv": 3 * 1207 * (1881+1) using normalized data
+
+```{r, Generate BRCA_NormMethod.csv, eval=F}
+dataname <- "BRCA"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+
+### "BRCAPositive_thres.csv": 1207*(289+1), positive control genes using threshold thres
+```{r, Generate BRCAPositive_thres.csv, eval=F }
+cancer <- "BRCA"
+count_list <- get_count_df(cancer = cancer)
+thres <- 3
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$mat_count, samples = count_list_pos$df_count$Sample),
+            paste("../RealData/", cancer, "Positive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+### "BRCAPositive_thres_NormMethod.csv": 3 * 1207 * (289+1) using normalized data
+
+```{r, Generate BRCAPositive_3_NormMethod.csv, eval=F}
+dataname <- "BRCAPositive_3"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+
+# miRNA LAML single datasets generation 
+### "LAML.csv" : 188 * (1881+1)
+
+```{r, Generate LAML.csv, eval=F}
+cancer <- "LAML"
+count_list <- get_count_df(cancer = cancer)
+write.table(data.frame(count_list$mat_count, samples = count_list$df_count$Sample),
+            paste("../RealData/", cancer, ".csv", sep = ""), sep =",", 
+            row.names = F, col.names = T)
+```
+
+
+### "LAMLPositive_thres.csv": 188 *(267+1)
+```{r, Generate LAMLPositive_thres.csv, eval=F }
+cancer <- "LAML"
+count_list <- get_count_df(cancer = cancer)
+thres <- 2
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$mat_count, samples = count_list_pos$df_count$Sample),
+            paste("../RealData/", cancer, "Positive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+# miRNA PRAD single datasets generation 
+### "PRAD.csv" : 551 * (1881+1)
+```{r, Generate PRAD.csv, eval=F}
+cancer <- "PRAD"
+count_list <- get_count_df(cancer = cancer)
+write.table(data.frame(count_list$mat_count, samples = count_list$df_count$Sample),
+            paste("../RealData/", cancer, ".csv", sep = ""), sep =",", 
+            row.names = F, col.names = T)
+```
+
+### "PRADPositive_thres.csv": 551 * (268+1)
+```{r, Generate PRADPositive_thres.csv, eval=F }
+cancer <- "PRAD"
+count_list <- get_count_df(cancer = cancer)
+thres <- 3
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$mat_count, samples = count_list_pos$df_count$Sample),
+            paste("../RealData/", cancer, "Positive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+# miRNA SKCM and LAML combine datasets generation
+
+### "SKCMLAML.csv": (452+188) * (1881+1+1) with groups labels cancer type
+```{r, Generate SKCMLAML.csv, eval=F}
+count_list_1 <- get_count_df(cancer = "SKCM")
+count_list_2 <- get_count_df(cancer = "LAML")
+count_list <- get_combine_count_df(df_count_1 = count_list_1$df_count,
+                                   df_count_2 = count_list_2$df_count,
+                                   group_name = c("SKCM","LAML"))
+write.table(data.frame(count_list$df_count, samples = rownames(count_list$df_count)), 
+            "../RealData/SKCMLAML.csv",
+            sep = ",", row.names = F, col.names = T)
+```
+
+### "SKCMLMAL_NormMethod.csv": 4 * (452+188) * (1881+1+1) with groups labels cancer type using normalized data
+
+```{r, Generate SKCMLAML_NormMethod.csv, eval=F}
+dataname <- "SKCMLAML"
+check_norm(dataname, selected = c("TC","TMM", "DESeq", "UQ"), save = T)
+```
+
+### "SKCMLAMLPositive_thres.csv": (452+188)*(317+1+1) with groups labels cancer type and positive controls using threshold thres
+
+```{r,  Generate SKCMLAMLPositive_thres.csv, eval=F }
+count_list_1 <- get_count_df(cancer = "SKCM")
+count_list_2 <- get_count_df(cancer = "LAML")
+count_list <- get_combine_count_df(df_count_1 = count_list_1$df_count,
+                                   df_count_2 = count_list_2$df_count,
+                                   group_name = c("SKCM","LAML"))
+thres <- 3
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$df_count, samples = rownames(count_list_pos$df_count)),
+            paste("../RealData/SKCMLAMLPositive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+
+### "SKCMLMALPositive_3_NormMethod.csv": 4 * (452+188) * (317+1+1) with groups labels cancer type using normalized data
+
+```{r, Generate SKCMLAMLPositive_3_NormMethod.csv, eval=F}
+dataname <- "SKCMLAMLPositive_3"
+check_norm(dataname, selected = c("TC","TMM", "DESeq", "UQ"), save = T)
+```
+
+
+# miRNA BRCA and PRAD combine datasets generation
+### "BRCAPRADPositive_thres.csv": (1207+551)*(279+1+1) with groups labels cancer type and positive controls using threshold thres
+
+```{r,  Generate BRCAPRADPositive_thres.csv, eval=F }
+count_list_1 <- get_count_df(cancer = "BRCA")
+count_list_2 <- get_count_df(cancer = "PRAD")
+count_list <- get_combine_count_df(df_count_1 = count_list_1$df_count,
+                                   df_count_2 = count_list_2$df_count,
+                                   group_name = c("BRCA","PRAD"))
+thres <- 3
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$df_count, samples = rownames(count_list_pos$df_count)),
+            paste("../RealData/BRCAPRADPositive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+
+### "BRCAPRADPositive_thres_TC.csv": 1 * (1207+551)*(279+1+1) for TC
+```{r, Generate BRCAPRADPositive_3_TC.csv, eval=F}
+dataname <- "BRCAPRADPositive_3"
+check_norm(dataname, selected = c("TC"), save = T)
+```
+
+
+# miRNA transfer learning
+
+### from SKCMLAMLPRAD to BRCA (451+188+551)*(1881+1)
+
+combine SKCMLAMPRAD into SKCMLAMLPRAD.csv and save in RealData/ and Transfer/
+```{r Generate SKCMLAMLPRAD.csv, eval=FALSE}
+skcm <- read.csv("../RealData/SKCM.csv")
+laml <- read.csv("../RealData/LAML.csv")
+prad <- read.csv("../RealData/PRAD.csv")
+# whether the features matched 
+mean(colnames(skcm) == colnames(laml)) == 1
+mean(colnames(laml) == colnames(prad)) == 1
+combine <- rbind(skcm, laml, prad)
+write.table(combine, "../RealData/SKCMLAMLPRAD.csv",
+            sep = ",", row.names = F, col.names = T)
+write.table(combine, "../Transfer/SKCMLAMLPRAD.csv",
+            sep = ",", row.names = F, col.names = T)
+```
+
+### from LAMLBRCAPRAD to SKCM (188+1207+551)*(1881+1)
+
+combine LAMLBRCAPRAD into LAMLBRCAPRAD.csv and save in RealData/ and Transfer/
+```{r Generate LAMLBRCAPRAD.csv, eval=FALSE}
+brca <- read.csv("../RealData/BRCA.csv")
+laml <- read.csv("../RealData/LAML.csv")
+prad <- read.csv("../RealData/PRAD.csv")
+# whether the features matched 
+mean(colnames(brca) == colnames(laml)) == 1
+mean(colnames(laml) == colnames(prad)) == 1
+combine <- rbind(laml, brca, prad)
+write.table(combine, "../RealData/LAMLBRCAPRAD.csv",
+            sep = ",", row.names = F, col.names = T)
+write.table(combine, "../Transfer/LAMLBRCAPRAD.csv",
+            sep = ",", row.names = F, col.names = T)
+```
+
+# RNA BRCA
+## "RNABRCAPositive_thres.csv"  1231 * (1099+1)
+```{r, Generate RNABRCAPositive_thres.csv, eval=F }
+cancer <- "RNABRCA"
+thres_mean <- 5
+thres_sd <- 2
+mat_count_pos <- get_count_positive_df_RNA(cancer, thres_mean = thres_mean, thres_sd = thres_sd)
+write.table(mat_count_pos,
+            paste("../RealData/", cancer, "Positive_", thres_mean,"-", thres_sd, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+## "RNABRCAPositive_thres_NormMethod.csv": 3 * 1231 * (1099+1) using normalized data
+
+```{r, Generate RNABRCAPositive_NormMethod.csv, eval=F}
+dataname <- "RNABRCAPositive_5-2"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+# RNA PRAD
+## "RNAPRADPositive_thres.csv"  554 * (460+1) with thres_sd=2,(1404+1) with 1.5 
+```{r, Generate RNAPRADPositive_thres.csv, eval=F }
+cancer <- "RNAPRAD"
+thres_mean <- 5
+thres_sd <- 2
+mat_count_pos <- get_count_positive_df_RNA(cancer, thres_mean = thres_mean, thres_sd = thres_sd)
+write.table(mat_count_pos,
+            paste("../RealData/", cancer, "Positive_", thres_mean,"-", thres_sd, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+## "RNAPRADPositive_thres_NormMethod.csv": 3 * 554 * (460+1) using normalized data
+
+```{r, Generate RNAPRADPositive_NormMethod.csv, eval=F}
+dataname <- "RNAPRADPositive_5-2"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ"), save = T)
+```
+
+# RNA BRCAPRAD
+## "RNABRCAPRADPositive_thres.csv"  (1231+554) * (1279+1+1) with groups label
+```{r, Generate RNABRCAPRADPositive_thres.csv, eval = FALSE}
+cancer <- "RNABRCAPRAD"
+thres_mean <- 5
+thres_sd <- 2
+df_count_brca <- read.csv(paste("../RealData/TCGA-RNABRCA.csv",sep=""), row.names = 1)
+df_count_prad <- read.csv(paste("../RealData/TCGA-RNAPRAD.csv",sep=""), row.names = 1)
+comb <- cbind(df_count_brca, df_count_prad)
+mat_count_pos <- get_count_positive_df_RNA(cancer = comb, thres_mean, thres_sd)
+write.table(data.frame(mat_count_pos, groups = rep(c("BRCA","PRAD"), c(ncol(df_count_brca), ncol(df_count_prad)))),
+            paste("../RealData/", cancer, "Positive_", thres_mean,"-", thres_sd, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+## "RNABRCAPRADPositive_thres_NormMethod.csv": 4 * (1231+554) * (1279+1+1) using normalized data
+
+```{r, Generate RNABRCAPRADPositive_NormMethod.csv, eval=F}
+dataname <- "RNABRCAPRADPositive_5-2"
+normed <- check_norm(dataname = dataname, selected = c("TC","TMM", "UQ", "DESeq"), save = T)
+```
+
+
+
+# RNA transfer learning
+split RNABRCAPRADPositive_5-2.csv as RNAPRAD_transfer.csv and RNABRCA_transfer.csv and save in RealData/ and Transfer/
+### from PRAD to BRCA (554)*(1279+1)
+```{r Generate RNAPRAD_transfer.csv, eval=FALSE}
+rnabrcaprad <- read.csv("../RealData/RNABRCAPRADPositive_5-2.csv")
+rnaprad_transfer <- rnabrcaprad[rnabrcaprad$groups == "PRAD",1:1280]
+write.table(rnaprad_transfer, "../Transfer/RNAPRADSPLIT.csv",
+            sep = ",", row.names = F, col.names = T)
+write.table(rnaprad_transfer, "../RealData/RNAPRADSPLIT.csv",
+            sep = ",", row.names = F, col.names = T)
+```
+### from BRCA to PRAD (1231)*(1279+1)
+```{r Generate RNABRCA_transfer.csv, eval=FALSE}
+rnabrca_transfer <- rnabrcaprad[rnabrcaprad$groups != "PRAD",1:1280]
+write.table(rnabrca_transfer, "../RealData/RNABRCASPLIT.csv",
+            sep = ",", row.names = F, col.names = T)
+write.table(rnabrca_transfer, "../Transfer/RNABRCASPLIT.csv",
+            sep = ",", row.names = F, col.names = T)
+```

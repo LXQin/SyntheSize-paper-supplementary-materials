@@ -1,0 +1,227 @@
+---
+title: "ReproduceExample"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("ReproduceExampleFunc.R")
+```
+
+## Use this file for an example run
+
+This file aims to guide you through the process of reproducing the analyses in the manuscript. In this file, we will use micro RNA sequencing dataset for cancer SKCM with marker filtering as the source/real dataset, and reproduce the evaluation of deep generative models on the pilot datasets.
+
+Before running the code, you should have download this repository. There should be four folders:
+
+* /R/ including this Rmd
+- /RealData/ for saving the downloaded TCGA dataset and store the source datasets for drawing pilot sets.
+- /GeneratedData/ for saving the generated datasets after running SyNG-BTS.
+- /FinalResAug2023/ for saving evaluation results .RData and the visualization figures.
+
+We firstly state using this file:
+
+1. DataOrganization: we firstly download TCGA-SKCM miRNA dataset using TCGAbiolink package. Then filtering out the markers based on mean threshold 4 on log2 scale. There should be a folder ../RealData/ to save the TCGA-SKCM.csv and SKCMPositive_4.csv. This is a part of the code from /R/DataOrganization.Rmd.
+
+2. Using SyNG-BTS PilotExperiments() to run pilot experiments. Go to repository at https://github.com/LXQin/SyNG-BTS. Download the corresponding code, follow the steps in readme. Specify the pilot sample sizes as (20, 60, 100). For each pilot sample size, this function draws 5 random pilot dataset from the SKCMPositive_4 dataset, and for each pilot dataset, this function then runs the specified deep generative models with the specified parameters, and generate new samples with size = 5*sample size of the SKCMPositive_4. Specify the `model` to different deep generative models, `batch_frac` for evaluating the effect of batch size,  `epoch` for different epoch strategies, e.g 1000 for fixed epochs, None for early stopping, `off_aug` for different offline augmentation, "AE_head" for adding auto-encoder before online training. All the generated datasets will be stored in ../GeneratedData/
+
+PilotExperiment(dataname = "SKCMPositive_4", pilot_size = [20, 60, 100],
+                model = "VAE1-10", batch_frac = 0.1, 
+                learning_rate = 0.0005, pre_model = None,
+                epoch = None,  off_aug = None, early_stop_num = 30,
+                AE_head_num = 2, Gaussian_head_num = 9)
+                
+                
+3. Evaluation: with the generated datasets in ../GeneratedData/, we then evaluate the quality of the generated datasets by comparing multiple metrics with the real datasets SKCMPositive_4.csv. This will create .RData file and store it to ../FinalResAug2023/ for visualization. This is a part of the code from /R/Evaluation.Rmd
+
+4. Visualization: with the .RData file, we can visualize the evaluation results. Depending on what generated datasets you have in the ../GeneratedData/ folder, this will generate one of the subfigure in Figure 2. This is a part of the code in /R/Visualization.Rmd
+
+## If you want to reproduce all results
+
+For reproducing the results for all datasets in the manuscript, you can run each step for all datasets at once.
+
+Firstly, go to /R/DataOrganization.Rmd, this will generate all the source datasets for drawing pilot sets, including the raw TCGA datasets, the miRNA and RNA ones, the single-group and two-group ones, the ones with or without marker filtering, and datasets for transfer learning. 
+
+Secondly, go do SyNG-BTS, you can use our package or just the code in SyNG-BTS repository. Basically, you will need to run PilotExperiment() multiple times by specifying different parameters to train the deep generative models, and get the generated datasets for further evaluation. Make sure you have enough disk space to save them. For all datasets needed to reproduce the results in our manuscript, make sure you have at least 250GB space to store the generated datasets. 
+
+Then, with all the generated datasets in ../GeneratedData/ and source datasets in ../RealData/, you can run /R/Evaluation.Rmd for evaluation results, this will generate all .RData for visualization. 
+
+Finally, with all .RData in ../FinalResAug2023/, go to /R/Visualization.Rmd, this will generate all the subfigures for figures in the manuscripts. We also have ../FinalResAug2023/GeneratedFigures/ folder containing these subfigures. You can compare your results with ours. 
+
+
+### DataOrganization
+
+#### 1. Download TCGA data 
+
+```{r, Download TCGA data using TCGAbiolinks}
+cancer <- "SKCM"
+mirna_query <- GDCquery(project = paste("TCGA-", cancer, sep = ""),
+                  data.category = "Transcriptome Profiling",
+                  data.type = "miRNA Expression Quantification",
+                  legacy = FALSE)
+clinical_query <- GDCquery(project = paste("TCGA-", cancer, sep = ""),
+                  data.category = "Clinical",
+                  legacy = FALSE)
+
+GDCdownload(mirna_query)
+experiment <- GDCprepare(mirna_query)
+data <- assay(experiment)
+write.csv(data, file = paste("../RealData/TCGA-", cancer, ".csv", sep = ""))
+```
+
+#### 2. Marker filtering 
+
+"SKCMPositive_thres.csv": 452*(298+1), positive control genes using threshold thres
+
+```{r, Generate SKCMPositive_thres.csv}
+cancer <- "SKCM"
+count_list <- get_count_df(cancer = cancer)
+thres <- 4
+count_list_pos <- get_count_positive_df(count_list = count_list, thres = thres)
+write.table(data.frame(count_list_pos$mat_count, samples = count_list_pos$df_count$Sample),
+            paste("../RealData/", cancer, "Positive_", thres, ".csv", sep = ""),
+            sep = ",", row.names = F, col.names = T)
+```
+
+### Evaluation
+
+Make sure you already run SyNG-BTS and get the generated datasets in ../GeneratedData/!
+
+```{r, SKCMPositive_4 - all}
+dataname <- "SKCMPositive_4"
+pilot_list <- c(20, 60, 100)
+model_list <- c("GAN", "WGAN", "WGANGP","VAE1-1", "VAE1-5", "VAE1-10", "maf", "glow", "realnvp")
+failure <- "remove"
+log <- T
+poly <- F
+skcm_pos <- get_eval(dataname = dataname, model_list = model_list, 
+                   pilot_list = pilot_list,  log = log, 
+                   failure = failure, poly = poly)
+save(skcm_pos, file = "../FinalResAug2023/SKCMPositive_4.RData")
+visual_eval(skcm_pos, model_list = model_list)
+```
+
+
+
+```{r, SKCMPositive_4 - offline}
+int_func <- function(x){
+  if(grepl( "AEhead", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("AEhead")}
+  else{return("Original")}}
+# define function to recover the model name 
+modelname_recov <- function(x){
+  ifelse(length(strsplit(x, "_")[[1]]) == 1, x, strsplit(x, "_")[[1]][-1])
+}
+# run evaluation 
+dataname <- "SKCMPositive_4"
+pilot_list <- c(20, 60, 100)
+model_list <- c("AEhead_VAE1-1", "AEhead_VAE1-5", "AEhead_VAE1-10",
+                "AEhead_GAN", "AEhead_WGAN", "AEhead_WGANGP",
+                "AEhead_maf", "AEhead_glow", "AEhead_realnvp")
+failure <- "remove"
+log <- T
+poly <- F
+skcm_pos_AEhead <- get_eval(dataname = dataname, model_list = model_list,
+                            pilot_list = pilot_list,  log = log, 
+                            failure = failure, poly = poly)
+skcm_pos_AEhead$offline <- sapply(skcm_pos_AEhead$model, int_func)
+skcm_pos_AEhead$modelname <- sapply(skcm_pos_AEhead$model, modelname_recov)
+save(skcm_pos_AEhead, file = "../FinalResAug2023/SKCMPositive_4_AEhead.RData")
+visual_eval(skcm_pos_AEhead, model_list = model_list)
+
+```
+
+```{r, SKCMPositive_4 - batch}
+# define function to extract the interested factor from model name
+int_func <- function(x){
+  if(grepl( "batchup", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("50%")}
+  else if (grepl( "batch", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("20%")}
+  else{return("10%")}}
+# define function to recover the model name 
+modelname_recov <- function(x){
+  ifelse(length(strsplit(x, "_")[[1]]) == 1, x, strsplit(x, "_")[[1]][-1])
+}
+# run evaluation 
+dataname <- "SKCMPositive_4"
+pilot_list <- c(20, 60, 100)
+model_list <- c("VAE1-10","batch_VAE1-10","batchup_VAE1-10",
+                "WGANGP","batch_WGANGP","batchup_WGANGP",
+                "maf","batch_maf","batchup_maf")
+failure <- "remove"
+log <- T
+poly <- F
+skcm_pos_batch <- get_eval(dataname = dataname, model_list = model_list,
+                           pilot_list = pilot_list,  log = log, 
+                           failure = failure, poly = poly)
+skcm_pos_batch$batch_frac <- sapply(skcm_pos_batch$model, int_func)
+skcm_pos_batch$modelname <- sapply(skcm_pos_batch$model, modelname_recov)
+save(skcm_pos_batch, file = "../FinalResAug2023/SKCMPositive_4_Batch.RData")
+visual_eval(skcm_pos_batch, model_list = model_list)
+```
+
+
+```{r, SKCMPositive_4 - epoch}
+# define function to extract the interested factor from model name
+int_func <- function(x){
+  if(grepl( "epochES", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("EarlyStop")}
+  else if (grepl( "epoch", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("Epoch=300")}
+  else{return("Epoch=1000")}}
+# define function to recover the model name 
+modelname_recov <- function(x){
+  ifelse(length(strsplit(x, "_")[[1]]) == 1, x, strsplit(x, "_")[[1]][-1])
+}
+# run evaluation 
+dataname <- "SKCMPositive_4"
+pilot_list <- c(20, 60, 100)
+model_list <- c("VAE1-10","epoch_VAE1-10","epochES_VAE1-10",
+                "WGANGP","epoch_WGANGP","epochES_WGANGP",
+                "maf","epoch_maf","epochES_maf")
+failure <- "remove"
+log <- T
+poly <- F
+skcm_pos_epoch <- get_eval(dataname = dataname, model_list = model_list,
+                           pilot_list = pilot_list,  log = log, 
+                           failure = failure, poly = poly)
+skcm_pos_epoch$epoch <- sapply(skcm_pos_epoch$model, int_func)
+skcm_pos_epoch$modelname <- sapply(skcm_pos_epoch$model, modelname_recov)
+save(skcm_pos_epoch, file = "../FinalResAug2023/SKCMPositive_4_Epoch.RData")
+visual_eval(skcm_pos_epoch, model_list = model_list)
+```
+
+
+```{r, SKCMPositive_4 - normalization}
+int_func <- function(x){
+  if(grepl( "TC", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("TC")}
+  else if (grepl( "TMM", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("TMM")}
+  else if (grepl( "UQ", strsplit(x, "_")[[1]][1],fixed = TRUE)){return("UQ")}
+  else{return("None")}}
+# define function to recover the model name 
+modelname_recov <- function(x){
+  ifelse(length(strsplit(x, "_")[[1]]) == 1, x, strsplit(x, "_")[[1]][-1])
+}
+# run evaluation 
+dataname <- "SKCMPositive_4"
+pilot_list <- c(20, 60, 100)
+model_list <- c("VAE1-10","TC_VAE1-10","TMM_VAE1-10","UQ_VAE1-10",
+                "WGANGP","TC_WGANGP","TMM_WGANGP","UQ_WGANGP",
+                "maf","TC_maf","TMM_maf","UQ_maf")
+failure <- "remove"
+log <- T
+poly <- F
+skcm_pos_norm <- get_eval(dataname = dataname, model_list = model_list,
+                      pilot_list = pilot_list,  log = log, 
+                      failure = failure, poly = poly)
+skcm_pos_norm$normalization <- sapply(skcm_pos_norm$model, int_func)
+skcm_pos_norm$modelname <- sapply(skcm_pos_norm$model, modelname_recov)
+save(skcm_pos_norm, file = "../FinalResAug2023/SKCMPositive_4_Normalization.RData")
+visual_eval(skcm_pos_norm, model_list = model_list)
+```
+
+
+### Visualization
+
+#### For miRNA SKCM with marker filtering: Figure 2B, D-H
+```{r}
+vis_all("SKCMPositive_4", "skcm_pos", 1)
+```
+
+
