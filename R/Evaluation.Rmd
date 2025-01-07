@@ -1244,7 +1244,7 @@ visual_eval(brca_pos_norm, model_list = model_list)
 ```{r, SKCMLAML- all}
 dataname <- "SKCMLAML"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-1", "CVAE1-5", "CVAE1-10")
+model_list <- c("CVAE1-1", "CVAE1-5", "CVAE1-10","maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1266,7 +1266,7 @@ modelname_recov <- function(x){
 dataname <- "SKCMLAML"
 pilot_list <- c(20, 60, 100)
 model_list <- c("CVAE1-1", "AEhead_CVAE1-1", "CVAE1-5", "AEhead_CVAE1-5", 
-                "CVAE1-10", "AEhead_CVAE1-10")
+                "CVAE1-10", "AEhead_CVAE1-10","maf","AEhead_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1293,7 +1293,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "SKCMLAML"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-10","batch_CVAE1-10","batchup_CVAE1-10")
+model_list <- c("CVAE1-10","batch_CVAE1-10","batchup_CVAE1-10","maf","batch_maf","batchup_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1319,7 +1319,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "SKCMLAML"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-10","epoch_CVAE1-10","epochES_CVAE1-10")
+model_list <- c("CVAE1-10","epoch_CVAE1-10","epochES_CVAE1-10", "maf","epoch_maf","epochES_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1348,6 +1348,7 @@ modelname_recov <- function(x){
 dataname <- "SKCMLAML"
 pilot_list <- c(20, 60, 100)
 model_list <- c("CVAE1-10","TC_CVAE1-10","TMM_CVAE1-10","UQ_CVAE1-10", "DESeq_CVAE1-10")
+# model_list <- c("maf","TC_maf","TMM_maf","UQ_maf", "DESeq_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1365,7 +1366,7 @@ visual_eval(skcmlaml_norm, model_list = model_list)
 ```{r, SKCMLAMLPositive_3 - all}
 dataname <- "SKCMLAMLPositive_3"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-1", "CVAE1-5", "CVAE1-10")
+model_list <- c("CVAE1-1", "CVAE1-5", "CVAE1-10","maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1413,7 +1414,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "SKCMLAMLPositive_3"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-10","batch_CVAE1-10","batchup_CVAE1-10")
+model_list <- c("CVAE1-10","batch_CVAE1-10","batchup_CVAE1-10","maf","batch_maf","batchup_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1439,7 +1440,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "SKCMLAMLPositive_3"
 pilot_list <- c(20, 60, 100)
-model_list <- c("CVAE1-10","epoch_CVAE1-10","epochES_CVAE1-10")
+model_list <- c("CVAE1-10","epoch_CVAE1-10","epochES_CVAE1-10","maf","epoch_maf","epochES_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1468,6 +1469,7 @@ modelname_recov <- function(x){
 dataname <- "SKCMLAMLPositive_3"
 pilot_list <- c(20, 60, 100)
 model_list <- c("CVAE1-10","TC_CVAE1-10","TMM_CVAE1-10","UQ_CVAE1-10", "DESeq_CVAE1-10")
+model_list <- c("maf","TC_maf","TMM_maf","UQ_maf", "DESeq_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1539,7 +1541,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "BRCAPRADPositive_3"
 pilot_list <- c(20, 60, 100)
-model_list <- c("TC_AEhead_CVAE1-10")
+model_list <- c("TC_AEhead_CVAE1-10","TC_AEhead_maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1722,7 +1724,7 @@ visual_eval(rnaprad_pos_Gaussianhead, model_list = model_list)
 ```{r, RNABRCAPRADPositive_5-2 - all}
 dataname <- "RNABRCAPRADPositive_5-2"
 pilot_list <- c(50, 150, 250)
-model_list <- c("CVAE1-100")
+model_list <- c("CVAE1-100","maf")
 failure <- "remove"
 log <- T
 poly <- F
@@ -1745,7 +1747,7 @@ modelname_recov <- function(x){
 # run evaluation 
 dataname <- "RNABRCAPRADPositive_5-2"
 pilot_list <- c(50, 150, 250)
-model_list <- c("CVAE1-100", "Gaussianhead_CVAE1-100")
+model_list <- c("CVAE1-100", "Gaussianhead_CVAE1-100","maf", "Gaussianhead_maf")
 failure <- "remove"
 log <- T
 poly <- F
